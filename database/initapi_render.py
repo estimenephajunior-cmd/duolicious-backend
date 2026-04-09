@@ -1,5 +1,6 @@
 def create_dbs():
-    # All this stuff just to run `CREATE DATABASE IF NOT EXISTS DB_NAME`
+    # Render Postgres starts with a service-specific bootstrap database,
+    # so we connect to that explicitly before creating duo_api.
     import os
     import psycopg
     import time
@@ -8,11 +9,18 @@ def create_dbs():
     DB_PORT = os.environ['DUO_DB_PORT']
     DB_USER = os.environ['DUO_DB_USER']
     DB_PASS = os.environ['DUO_DB_PASS']
+    DB_BOOTSTRAP_NAME = (
+        os.environ.get('PGDATABASE')
+        or os.environ.get('DUO_DB_NAME')
+        or 'postgres'
+    )
+
     _conninfo = psycopg.conninfo.make_conninfo(
         host=DB_HOST,
         port=DB_PORT,
         user=DB_USER,
         password=DB_PASS,
+        dbname=DB_BOOTSTRAP_NAME,
     )
 
     def create_db(name):
@@ -29,7 +37,7 @@ def create_dbs():
             ):
                 print(f'Database already exists: {name}')
                 break
-            except psycopg.errors.OperationalError:
+            except psycopg.errors.OperationalError as e:
                 print(
                     'Creating database(s) failed; waiting and trying again:',
                     e
@@ -38,8 +46,8 @@ def create_dbs():
 
     create_db('duo_api')
 
+
 def init_db():
-    # Now DB_NAME exists, we do do the rest of the init.
     from service import (
         api,
         location,
@@ -59,6 +67,7 @@ def init_db():
         print(f'  * {i} of {len(init_funcs)}')
         init_func()
     print('Finished initializing api DB')
+
 
 create_dbs()
 init_db()

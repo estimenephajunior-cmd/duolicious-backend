@@ -179,6 +179,10 @@ def _render_safe_init_sql():
         count=1,
     )
 
+    # Render-managed Postgres does not permit non-superusers to define
+    # LEAKPROOF functions, so strip that attribute from the bootstrap SQL.
+    base_sql = re.sub(r"\s+LEAKPROOF\b", "", base_sql)
+
     return base_sql
 
 

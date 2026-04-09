@@ -197,6 +197,7 @@ def init_db():
     if row['to_regclass'] is None:
         print('Initializing api DB with Render-safe bootstrap...')
         with api_tx() as tx:
+            tx.execute('SET LOCAL statement_timeout = 0')
             tx.execute(_render_safe_init_sql())
     else:
         print('Database already initialized')

@@ -88,19 +88,41 @@ WITH updated_verification_job AS (
     UPDATE
         person
     SET
-        verification_level_id = (
-            SELECT
-                id
-            FROM
-                verification_level
-            WHERE
-                name = %(verification_level_name)s
-        ),
+        verification_level_id = CASE
+            WHEN verification_required THEN verification_level_id
+            ELSE (
+                SELECT
+                    id
+                FROM
+                    verification_level
+                WHERE
+                    name = %(verification_level_name)s
+            )
+        END,
         verified_age = %(verified_age)s,
         verified_gender = %(verified_gender)s,
         verified_ethnicity = %(verified_ethnicity)s
     WHERE
         id IN (SELECT person_id FROM successful_verification_job)
+), updated_review AS (
+    INSERT INTO verification_review (
+        person_id,
+        ai_status,
+        ai_message,
+        updated_at
+    )
+    SELECT
+        person_id,
+        %(status)s,
+        %(message)s,
+        NOW()
+    FROM
+        updated_verification_job
+    ON CONFLICT (person_id) DO UPDATE
+    SET
+        ai_status = EXCLUDED.ai_status,
+        ai_message = EXCLUDED.ai_message,
+        updated_at = NOW()
 ), updated_photo AS (
     UPDATE
         photo

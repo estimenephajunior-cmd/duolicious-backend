@@ -53,7 +53,7 @@ def normalize_email_dots(email: str) -> str:
     name, domain = email.lower().split('@')
 
     if domain not in dot_insignificant_email_domains:
-        return email
+        return f'{name}@{domain}'
 
     name = name.replace('.', '')
 
@@ -63,7 +63,7 @@ def normalize_email_pluses(email: str) -> str:
     name, domain = email.lower().split('@')
 
     if domain not in plus_address_domains:
-        return email
+        return f'{name}@{domain}'
 
     name, *_ = name.split('+')
 
@@ -73,7 +73,7 @@ def normalize_email_domain(email: str) -> str:
     name, domain = email.lower().split('@')
 
     if domain != 'googlemail.com':
-        return email
+        return f'{name}@{domain}'
 
     return f'{name}@gmail.com'
 

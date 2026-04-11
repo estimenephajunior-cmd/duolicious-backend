@@ -26,6 +26,7 @@ import traceback
 from datetime import timedelta
 from pathlib import Path
 from typing import Dict, Iterable, Tuple, Union
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 import threading
 
@@ -155,10 +156,18 @@ def _download_or_load(name: ListName, update_interval: timedelta) -> str:
         # Cache miss or stale – download
         url = _blocklist_url(name)
         print(f'Downloading {url}')
-        with urlopen(url, timeout=30) as resp:
-            raw_bytes = resp.read()
-        print(f'Finished downloading {url}')
-        text = raw_bytes.decode("utf-8", errors="ignore")
+        try:
+            with urlopen(url, timeout=30) as resp:
+                raw_bytes = resp.read()
+            print(f'Finished downloading {url}')
+            text = raw_bytes.decode("utf-8", errors="ignore")
+        except (HTTPError, URLError, TimeoutError) as exc:
+            if path.exists():
+                print(f'FireHOL download failed for {url}; reusing cached list. ({exc})')
+                return path.read_text(encoding="utf-8", errors="ignore")
+
+            print(f'FireHOL download failed for {url} and no cached list exists. ({exc})')
+            return ""
 
         # Atomic write: write to tmp → replace
         tmp = path.with_suffix(".tmp")
@@ -222,8 +231,14 @@ def _worker_main(conn: mp.connection.Connection,
 
         try:
             data = _collect_all(lists, update_interval)
-            tries = _build_tries(data)
-            next_refresh = time.time() + update_interval.total_seconds()
+            if data:
+                tries = _build_tries(data)
+                next_refresh = time.time() + update_interval.total_seconds()
+            else:
+                next_refresh = time.time() + min(update_interval.total_seconds(), 900)
+        except Exception as exc:
+            print(f'FireHOL refresh failed; backing off before retry. ({exc})')
+            next_refresh = time.time() + min(update_interval.total_seconds(), 900)
         finally:
             refreshing = False  # allow future refreshes
 

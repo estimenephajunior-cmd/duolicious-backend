@@ -21,14 +21,22 @@ LIMIT 10
 """
 
 def init_db():
+    with api_tx() as tx:
+        row = tx.execute("SELECT COUNT(*) AS count FROM location").fetchone()
+        if int(row['count'] or 0) != 0:
+            return
+
+    if not os.path.exists(_locations_json_file):
+        print(
+            f"Location seed file missing at {_locations_json_file}. "
+            "Skipping location bootstrap."
+        )
+        return
+
     with open(_locations_json_file) as f:
         locations = json.load(f)
 
     with api_tx() as tx:
-        tx.execute("SELECT COUNT(*) FROM location")
-        if tx.fetchone()['count'] != 0:
-            return
-
         tx.executemany(
             """
             INSERT INTO Location (

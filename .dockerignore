@@ -1,1 +1,9 @@
+.git
+.github
 venv
+test
+__pycache__
+**/__pycache__
+*.pyc
+.mypy_cache
+.pytest_cache

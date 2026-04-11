@@ -167,6 +167,15 @@ Q_COMPUTED_FLAIR = """
                 WHERE
                     audio.person_id = id
             )
+        UNION
+            SELECT 'admin' WHERE (
+                roles IS NOT NULL
+                AND
+                (
+                    'admin' = ANY(roles)
+                    OR 'bot' = ANY(roles)
+                )
+            )
     ) t
     WHERE
         e IS NOT NULL

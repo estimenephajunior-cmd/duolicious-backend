@@ -1,5 +1,5 @@
 # syntax=docker.io/docker/dockerfile:1.7-labs
-FROM python:3.11
+FROM python:3.12-slim
 
 ENV DUO_USE_VENV=false
 ENV PYTHONUNBUFFERED=true
@@ -18,4 +18,4 @@ RUN : \
   && pip install --no-cache-dir -r /app/requirements.txt \
   && python -m spacy download en_core_web_sm
 
-CMD /app/api.main.sh
+CMD sh /app/api.main.sh

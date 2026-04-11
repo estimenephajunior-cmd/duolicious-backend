@@ -106,6 +106,13 @@ def _is_private_ip() -> bool:
     except ValueError:
         return False
 
+
+def _is_rate_limit_exempt() -> bool:
+    if request.method == 'OPTIONS':
+        return True
+
+    return _is_private_ip()
+
 def _get_remote_address() -> str:
     """
     :return: the ip address for the current request
@@ -129,13 +136,13 @@ limiter = Limiter(
     default_limits=[default_limits],
     storage_uri=f"redis://{REDIS_HOST}:{REDIS_PORT}",
     strategy="fixed-window",
-    default_limits_exempt_when=_is_private_ip,
+    default_limits_exempt_when=_is_rate_limit_exempt,
 )
 
 shared_otp_limit = limiter.shared_limit(
     "3 per minute",
     scope="otp",
-    exempt_when=_is_private_ip,
+    exempt_when=_is_rate_limit_exempt,
 )
 
 def limiter_account():
@@ -149,8 +156,7 @@ SELECT
     duo_session.person_id,
     person.uuid::TEXT AS person_uuid,
     duo_session.email,
-    duo_session.signed_in,
-    duo_session.pending_club_name
+    duo_session.signed_in
 FROM
     duo_session
 LEFT JOIN
@@ -244,7 +250,6 @@ def require_auth(expected_onboarding_status, expected_sign_in_status):
                 person_id=row['person_id']
                 person_uuid=row['person_uuid']
                 signed_in=row['signed_in']
-                pending_club_name=row['pending_club_name']
 
                 session_info = duotypes.SessionInfo(
                     email=email,
@@ -252,7 +257,6 @@ def require_auth(expected_onboarding_status, expected_sign_in_status):
                     person_uuid=person_uuid,
                     signed_in=signed_in,
                     session_token_hash=session_token_hash,
-                    pending_club_name=pending_club_name,
                 )
 
                 g.normalized_email = normalize_email(email)

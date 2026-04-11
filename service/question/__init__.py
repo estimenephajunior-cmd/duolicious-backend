@@ -66,7 +66,110 @@ LIMIT %(n)s
 OFFSET %(o)s
 """
 
+Q_ADMIN_LIST_QUESTIONS = """
+SELECT
+    id,
+    question,
+    topic,
+    count_yes,
+    count_no
+FROM
+    question
+ORDER BY
+    id ASC
+"""
+
+Q_ADMIN_CREATE_QUESTION = """
+INSERT INTO question (
+    question,
+    topic,
+    presence_given_yes,
+    presence_given_no,
+    absence_given_yes,
+    absence_given_no
+)
+VALUES (
+    %(question)s,
+    %(topic)s,
+    ARRAY[]::INT[],
+    ARRAY[]::INT[],
+    ARRAY[]::INT[],
+    ARRAY[]::INT[]
+)
+RETURNING
+    id,
+    question,
+    topic,
+    count_yes,
+    count_no
+"""
+
+Q_ADMIN_UPDATE_QUESTION = """
+UPDATE
+    question
+SET
+    question = COALESCE(NULLIF(%(question)s, ''), question),
+    topic = COALESCE(NULLIF(%(topic)s, ''), topic)
+WHERE
+    id = %(id)s
+RETURNING
+    id,
+    question,
+    topic,
+    count_yes,
+    count_no
+"""
+
+Q_ADMIN_DELETE_QUESTION = """
+DELETE FROM
+    question
+WHERE
+    id = %(id)s
+RETURNING
+    id
+"""
+
 def init_db():
+    with api_tx() as tx:
+        row = tx.execute('SELECT COUNT(*) AS count FROM question').fetchone()
+        question_count = int(row['count'] or 0)
+
+    if question_count == 0:
+        if not os.path.exists(_categorised_question_json_file):
+            print(
+                'Question seed file missing. Skipping question bootstrap: '
+                + _categorised_question_json_file
+            )
+            return
+    else:
+        with api_tx() as tx:
+            row = tx.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM question
+                WHERE presence_given_yes = ARRAY[]::INT[]
+                """
+            ).fetchone()
+            needs_trait_vectors = int(row['count'] or 0) > 0
+
+        if not needs_trait_vectors:
+            return
+
+    required_seed_files = [
+        _categorised_question_json_file,
+        _questions_text_file,
+        _archetypeised_question_json_file,
+    ]
+
+    missing_seed_files = [path for path in required_seed_files if not os.path.exists(path)]
+
+    if missing_seed_files:
+        print(
+            'Question seed file(s) missing. Skipping question bootstrap: '
+            + ', '.join(missing_seed_files)
+        )
+        return
+
     with open(_categorised_question_json_file) as f:
         categorised_questions = json.load(f)
 
@@ -77,8 +180,7 @@ def init_db():
         key=lambda q: question_to_index[q["question"]])
 
     with api_tx() as tx:
-        tx.execute('SELECT COUNT(*) FROM question')
-        if tx.fetchone()['count'] == 0:
+        if question_count == 0:
             tx.executemany(
                 """
                 INSERT INTO question (
@@ -109,14 +211,7 @@ def init_db():
     archetypeised_questions = load_questions(_archetypeised_question_json_file)
 
     with api_tx() as tx:
-        tx.execute(
-            """
-            SELECT COUNT(*)
-            FROM question
-            WHERE presence_given_yes = ARRAY[]::INT[]
-            """
-        )
-        if tx.fetchone()['count'] > 0:
+        if question_count == 0 or needs_trait_vectors:
             tx.execute(
                 """
                 CREATE TEMPORARY TABLE question_trait_pair (
@@ -211,3 +306,125 @@ def get_search_filter_questions(s: t.SessionInfo, q: str, n: str, o: str):
 
     with api_tx('READ COMMITTED') as tx:
         return tx.execute(Q_GET_SEARCH_FILTER_QUESTIONS, params).fetchall()
+
+
+def get_admin_questions():
+    with api_tx('READ COMMITTED') as tx:
+        return tx.execute(Q_ADMIN_LIST_QUESTIONS).fetchall()
+
+
+def create_admin_question(data: dict):
+    question_text = (data.get('question') or '').strip()
+    topic = (data.get('topic') or '').strip()
+
+    if not question_text or not topic:
+        return 'Missing required fields question or topic', 400
+
+    with api_tx() as tx:
+        return tx.execute(
+            Q_ADMIN_CREATE_QUESTION,
+            {
+                'question': question_text,
+                'topic': topic,
+            },
+        ).fetchone()
+
+
+def update_admin_question(question_id: int, data: dict):
+    with api_tx() as tx:
+        row = tx.execute(
+            Q_ADMIN_UPDATE_QUESTION,
+            {
+                'id': question_id,
+                'question': data.get('question', ''),
+                'topic': data.get('topic', ''),
+            },
+        ).fetchone()
+
+    if not row:
+        return 'Question not found', 404
+
+    return row
+
+
+def delete_admin_question(question_id: int):
+    with api_tx() as tx:
+        row = tx.execute(Q_ADMIN_DELETE_QUESTION, {'id': question_id}).fetchone()
+
+    if not row:
+        return 'Question not found', 404
+
+    return {'id': question_id, 'deleted': True}
+
+
+def import_admin_questions(data):
+    raw_questions = data.get('questions') if isinstance(data, dict) else data
+
+    if not isinstance(raw_questions, list) or not raw_questions:
+        return 'JSON must be an array of questions or an object with a questions array.', 400
+
+    normalized_rows: list[dict[str, str]] = []
+    seen_questions: set[str] = set()
+    allowed_topics = {topic.lower(): topic for topic in QUESTION_CATEGORIES}
+
+    for item in raw_questions:
+        if not isinstance(item, dict):
+            return 'Each imported question must be an object with question and topic.', 400
+
+        question_text = str(item.get('question') or '').strip()
+        topic_text = str(item.get('topic') or '').strip()
+
+        if not question_text or not topic_text:
+            return 'Each imported question needs question and topic.', 400
+
+        normalized_topic = allowed_topics.get(topic_text.lower(), topic_text)
+        dedupe_key = question_text.lower()
+        if dedupe_key in seen_questions:
+            continue
+
+        seen_questions.add(dedupe_key)
+        normalized_rows.append({
+            'question': question_text,
+            'topic': normalized_topic,
+        })
+
+    if not normalized_rows:
+        return {'created': 0, 'skipped_existing': 0, 'total_processed': 0}
+
+    created = 0
+    skipped_existing = 0
+
+    with api_tx() as tx:
+        for row in normalized_rows:
+            existing = tx.execute(
+                """
+                SELECT id
+                FROM question
+                WHERE LOWER(question) = LOWER(%(question)s)
+                LIMIT 1
+                """,
+                row,
+            ).fetchone()
+
+            if existing:
+                skipped_existing += 1
+                continue
+
+            tx.execute(Q_ADMIN_CREATE_QUESTION, row)
+            created += 1
+
+    return {
+        'created': created,
+        'skipped_existing': skipped_existing,
+        'total_processed': len(normalized_rows),
+    }
+
+
+QUESTION_CATEGORIES = [
+    'Interpersonal',
+    'Values',
+    'Lifestyle',
+    'Long-term',
+    'Fun',
+    'Other',
+]

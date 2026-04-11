@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/bin/sh
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+script_dir="$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd)"
 cd "$script_dir"
 
 set -e

@@ -1,5 +1,4 @@
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletion
 from dataclasses import dataclass
 from typing import Literal
 import json
@@ -65,7 +64,7 @@ def get_system_content(
         '  image_1_has_exactly_one_person: number',
         '',
         f'  // Image #1 contains a person whose gender is: {claimed_gender}.',
-        f'  // When checking this claim, note that the user chose this gender from these options: Man, Woman, Agender, Femboy, Intersex, Non-binary, Transgender, Trans woman, Trans man, and Other.',
+        f'  // When checking this claim, note that the user chose this gender from these options: Man and Woman.',
         f'  // In equivocal cases, prefer probabilities near 1.0.',
         '  image_1_has_claimed_gender: number',
         '',

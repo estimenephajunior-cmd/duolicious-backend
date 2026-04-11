@@ -10,6 +10,7 @@ DB_HOST = os.environ['DUO_DB_HOST']
 DB_PORT = os.environ['DUO_DB_PORT']
 DB_USER = os.environ['DUO_DB_USER']
 DB_PASS = os.environ['DUO_DB_PASS']
+DB_STATEMENT_TIMEOUT_MS = os.environ.get('DUO_DB_STATEMENT_TIMEOUT_MS', '300000')
 
 _valid_isolation_levels = [
     'SERIALIZABLE',
@@ -28,7 +29,7 @@ _coninfo_args = dict(
         f" -c default_transaction_isolation=" +
             _default_transaction_isolation.replace(' ', '\\ ') +
         f" -c idle_session_timeout=0"
-        f" -c statement_timeout=5000"
+        f" -c statement_timeout={DB_STATEMENT_TIMEOUT_MS}"
     ),
 )
 

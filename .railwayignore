@@ -1,0 +1,15 @@
+.git
+.github
+venv
+vm
+test
+__pycache__
+**/__pycache__
+*.pyc
+.mypy_cache
+.pytest_cache
+antiabuse/antiporn/model.onnx.part00
+antiabuse/antiporn/model.onnx.part01
+antiabuse/antiporn/model.onnx.part02
+antiabuse/antiporn/model.onnx.part03
+antiabuse/antiporn/model.onnx.part04

@@ -42,9 +42,6 @@ from duohash import md5
 
 register_heif_opener()
 
-CLUB_PATTERN = r"""^[a-zA-Z0-9/#'"_-]+( [a-zA-Z0-9/#'"_-]+)*$"""
-CLUB_MAX_LEN = 42
-
 HEX_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
 
 MIN_NAME_LEN = 1
@@ -61,6 +58,8 @@ MIN_GIF_DIM = 10
 
 MIN_PHOTO_POSITION = 1
 MAX_PHOTO_POSITION = 7
+REFERRAL_CODE_PATTERN = r"^[A-Z0-9]{6,12}$"
+ALLOWED_REGISTRATION_GENDERS = {"Man", "Woman"}
 
 
 def validate_gif_dimensions(larger_dim: int, smaller_dim: int):
@@ -89,12 +88,6 @@ def validate_image_dimensions(larger_dim: int, smaller_dim: int):
                 f'Image must be greater than '
                 f'{MIN_IMAGE_DIM}x{MIN_IMAGE_DIM} '
                 'pixels')
-
-
-class ClubItem(BaseModel):
-    name: str
-    count_members: int
-    search_preference: Optional[bool]
 
 
 class Base64AudioFile(BaseModel):
@@ -238,7 +231,6 @@ class SessionInfo(BaseModel):
     person_uuid: Optional[str]
     onboarded: bool
     signed_in: bool
-    pending_club_name: Optional[str]
 
     @model_validator(mode='before')
     def set_onboarded(cls, values):
@@ -258,36 +250,108 @@ class DeleteAnswer(BaseModel):
 
 class PostRequestOtp(BaseModel):
     email: EmailStr
-    pending_club_name: Optional[str] = Field(
+    referral_code: Optional[str] = Field(
         default=None,
-        pattern=CLUB_PATTERN,
-        min_length=1,
-        max_length=CLUB_MAX_LEN,
+        pattern=REFERRAL_CODE_PATTERN,
+        min_length=6,
+        max_length=12,
+    )
+    jw_quiz_token: Optional[str] = Field(
+        default=None,
+        min_length=16,
+        max_length=256,
+    )
+    sign_in_only: bool = False
+
+    @field_validator('email', mode='before')
+    def validate_email(cls, value):
+        return EmailStr._validate(value.lower().strip())
+
+    @field_validator('referral_code', mode='before')
+    def validate_referral_code(cls, value):
+        if value is None:
+            return None
+        return str(value).strip().upper()
+
+    @field_validator('jw_quiz_token', mode='before')
+    def validate_jw_quiz_token(cls, value):
+        if value is None:
+            return None
+        return str(value).strip()
+
+class PostValidateReferralCode(BaseModel):
+    referral_code: str = Field(
+        pattern=REFERRAL_CODE_PATTERN,
+        min_length=6,
+        max_length=12,
+    )
+
+    @field_validator('referral_code', mode='before')
+    def validate_referral_code(cls, value):
+        return str(value).strip().upper()
+
+
+class PostCheckOtp(BaseModel):
+    otp: str = Field(pattern=r"^\d{6}$")
+
+    @field_validator('otp', mode='before')
+    def strip_otp(cls, value):
+        return str(value).strip()
+
+
+class PostStartJwQuiz(BaseModel):
+    email: EmailStr
+    referral_code: str = Field(
+        pattern=REFERRAL_CODE_PATTERN,
+        min_length=6,
+        max_length=12,
     )
 
     @field_validator('email', mode='before')
     def validate_email(cls, value):
         return EmailStr._validate(value.lower().strip())
 
-    @field_validator('pending_club_name', mode='before')
-    def validate_pending_club_name(cls, value):
-        return value.lower().strip()
+    @field_validator('referral_code', mode='before')
+    def validate_referral_code(cls, value):
+        return str(value).strip().upper()
 
 
-class PostCheckOtp(BaseModel):
-    otp: str = Field(pattern=r"^\d{6}$")
+class JwQuizAnswerItem(BaseModel):
+    question_id: int = Field(ge=1)
+    selected_option: str = Field(min_length=1, max_length=256)
+
+    @field_validator('selected_option', mode='before')
+    def validate_selected_option(cls, value):
+        return str(value).strip()
+
+
+class PostCompleteJwQuiz(BaseModel):
+    jw_quiz_token: str = Field(min_length=16, max_length=256)
+    answers: list[JwQuizAnswerItem] = Field(default_factory=list, min_length=1, max_length=12)
+
+    @field_validator('jw_quiz_token', mode='before')
+    def validate_jw_quiz_token(cls, value):
+        return str(value).strip()
 
 
 class PatchOnboardeeInfo(BaseModel):
+    referral_code: Optional[str] = Field(
+        default=None,
+        pattern=REFERRAL_CODE_PATTERN,
+        min_length=6,
+        max_length=12,
+    )
     name: Optional[str] = Field(
         default=None,
         min_length=MIN_NAME_LEN,
         max_length=MAX_NAME_LEN,
     )
     date_of_birth: Optional[str] = None
+    baptism_date: Optional[str] = None
     location: Optional[str] = Field(default=None, min_length=1)
+    congregation_id: Optional[int] = Field(default=None, ge=1)
     gender: Optional[str] = Field(default=None, min_length=1)
-    other_peoples_genders: Optional[List[str]] = Field(default=None, min_length=1)
+    other_peoples_genders: Optional[List[str]] = None
     base64_file: Optional[Base64File] = None
 
     @field_validator('name', mode='before')
@@ -308,17 +372,31 @@ class PatchOnboardeeInfo(BaseModel):
         for gender in value:
             if len(gender) < 1:
                 raise ValueError('each gender must be at least 1 character long')
+            if gender not in ALLOWED_REGISTRATION_GENDERS:
+                raise ValueError('Only Man or Woman are allowed')
         return value
 
-    @field_validator('date_of_birth')
-    def age_must_be_18_or_up(cls, date_of_birth):
+    @field_validator('referral_code', mode='before')
+    @classmethod
+    def normalize_referral_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return str(value).strip().upper()
+
+    @field_validator('gender')
+    @classmethod
+    def validate_gender(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        if value not in ALLOWED_REGISTRATION_GENDERS:
+            raise ValueError('Only Man or Woman are allowed')
+        return value
+
+    @field_validator('date_of_birth', 'baptism_date')
+    def validate_date_string(cls, date_of_birth):
         if date_of_birth is None:
             return date_of_birth
-        date_of_birth_date = datetime.strptime(date_of_birth, '%Y-%m-%d').date()
-        today = date.today()
-        age = relativedelta(today, date_of_birth_date).years
-        if age < 18:
-            raise ValueError('Age must be 18 or up')
+        datetime.strptime(date_of_birth, '%Y-%m-%d').date()
         return date_of_birth
 
     @field_validator('name')
@@ -425,6 +503,18 @@ class PatchProfileInfo(BaseModel):
     drugs: Optional[str] = None
     long_distance: Optional[str] = None
     relationship_status: Optional[str] = None
+    pioneer_status: Optional[str] = None
+    service_goals: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    willingness_to_relocate: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    family_worship_habit: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    spiritual_routine: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    willing_to_involve_family_early: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    open_to_chaperoned_video_calls: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    congregation_compatibility: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    service_lifestyle: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    life_stage: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    emotional_temperament: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    communication_style: Optional[str] = Field(default=None, min_length=1, max_length=120)
     has_kids: Optional[str] = None
     wants_kids: Optional[str] = None
     exercise: Optional[str] = None
@@ -434,10 +524,14 @@ class PatchProfileInfo(BaseModel):
     chats: Optional[str] = None
     intros: Optional[str] = None
     verification_level: Optional[str] = None
+    profile_status: Optional[str] = None
     show_my_location: Optional[str] = None
     show_my_age: Optional[str] = None
     hide_me_from_strangers: Optional[str] = None
     browse_invisibly: Optional[str] = None
+    who_can_contact_me: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    request_format_preference: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    message_pace_preference: Optional[str] = Field(default=None, min_length=1, max_length=120)
     theme: Optional[Theme] = None
 
     @model_validator(mode='after')
@@ -468,6 +562,14 @@ class PatchProfileInfo(BaseModel):
             raise ValueError('Too rude')
         return value
 
+    @field_validator('gender')
+    def gender_must_be_allowed(cls, value):
+        if value is None:
+            return value
+        if value not in ALLOWED_REGISTRATION_GENDERS:
+            raise ValueError('Only Man or Woman are allowed')
+        return value
+
     @field_validator('about')
     def about_must_not_be_rude(cls, value):
         if value is None:
@@ -487,6 +589,14 @@ class PatchProfileInfo(BaseModel):
             raise ValueError('Spam')
         return value
 
+    @field_validator('profile_status')
+    def profile_status_must_be_allowed(cls, value):
+        if value is None:
+            return value
+        if value not in {'active', 'paused', 'serious'}:
+            raise ValueError('Invalid profile status')
+        return value
+
     @field_validator('occupation')
     def occupation_must_not_be_rude(cls, value):
         if value is None:
@@ -500,6 +610,29 @@ class PatchProfileInfo(BaseModel):
         if value is None:
             return value
         if antiabuse.antirude.education.is_rude(value):
+            raise ValueError('Too rude')
+        return value
+
+    @field_validator(
+        'service_goals',
+        'willingness_to_relocate',
+        'family_worship_habit',
+        'spiritual_routine',
+        'willing_to_involve_family_early',
+        'open_to_chaperoned_video_calls',
+        'congregation_compatibility',
+        'service_lifestyle',
+        'life_stage',
+        'emotional_temperament',
+        'communication_style',
+        'who_can_contact_me',
+        'request_format_preference',
+        'message_pace_preference',
+    )
+    def marriage_minded_fields_must_not_be_rude(cls, value):
+        if value is None:
+            return value
+        if antiabuse.antirude.profile.is_rude(value):
             raise ValueError('Too rude')
         return value
 
@@ -517,23 +650,31 @@ class PostSearchFilter(BaseModel):
         max_height_cm: Optional[int]
 
     gender: Optional[List[str]] = Field(default=None, min_length=1)
-    orientation: Optional[List[str]] = Field(default=None, min_length=1)
     ethnicity: Optional[List[str]] = Field(default=None, min_length=1)
+    city: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    state: Optional[str] = Field(default=None, min_length=1, max_length=120)
     age: Optional[Age] = None
+    baptism_years: Optional[int] = Field(default=None, ge=2, le=80)
     furthest_distance: Optional[int] = None
     height: Optional[Height] = None
     has_a_profile_picture: Optional[List[str]] = Field(default=None, min_length=1)
     looking_for: Optional[List[str]] = Field(default=None, min_length=1)
-    smoking: Optional[List[str]] = Field(default=None, min_length=1)
     drinking: Optional[List[str]] = Field(default=None, min_length=1)
-    drugs: Optional[List[str]] = Field(default=None, min_length=1)
     long_distance: Optional[List[str]] = Field(default=None, min_length=1)
     relationship_status: Optional[List[str]] = Field(default=None, min_length=1)
+    pioneer_status: Optional[List[str]] = Field(default=None, min_length=1)
     has_kids: Optional[List[str]] = Field(default=None, min_length=1)
     wants_kids: Optional[List[str]] = Field(default=None, min_length=1)
     exercise: Optional[List[str]] = Field(default=None, min_length=1)
     religion: Optional[List[str]] = Field(default=None, min_length=1)
     star_sign: Optional[List[str]] = Field(default=None, min_length=1)
+
+    @model_validator(mode='before')
+    def strip_strings(cls, values):
+        for key in ('city', 'state'):
+            if key in values and values[key] is not None:
+                values[key] = str(values[key]).strip()
+        return values
 
     people_you_messaged: Optional[str] = None
     people_you_skipped: Optional[str] = None
@@ -567,43 +708,23 @@ class PostInboxInfo(BaseModel):
     person_uuids: List[str]
 
 
-class PostJoinClub(BaseModel):
-    name: str = Field(
-        pattern=CLUB_PATTERN,
-        min_length=1,
-        max_length=CLUB_MAX_LEN,
-    )
-
-    @model_validator(mode='before')
-    def validate_name(cls, values):
-        name = values.get('name')
-
-        if name is None:
-            return values
-
-        name = ' '.join(name.split())
-        if len(name) < 1:
-            raise ValueError('Name must be one or more characters long')
-
-        values['name'] = name.lower().strip()
-
-        return values
-
-
-class PostLeaveClub(BaseModel):
-    name: str = Field(
-        pattern=CLUB_PATTERN,
-        min_length=1,
-        max_length=CLUB_MAX_LEN,
-    )
-
-
 class PostSkip(BaseModel):
+    report_category: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+    )
+    report_context: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
     report_reason: Optional[str] = Field(
         default=None,
         min_length=1,
         max_length=10000,
     )
+    base64_file: Optional[Base64File] = None
 
     @field_validator('report_reason', mode='before')
     @classmethod
@@ -612,9 +733,195 @@ class PostSkip(BaseModel):
             return value
         return value.strip()
 
+    @field_validator('report_category', 'report_context', mode='before')
+    @classmethod
+    def strip_report_metadata(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return value.strip()
+
 
 class PostVerificationSelfie(BaseModel):
     base64_file: Base64File
+
+
+class PostVerificationDocument(BaseModel):
+    kind: Literal['government_id', 'witness', 'supporting_photo']
+    label: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    base64_file: Base64File
+
+    @field_validator('label', mode='before')
+    @classmethod
+    def strip_label(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return value.strip()
+
+
+class PostIntroReviewAction(BaseModel):
+    prompt: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+
+    @field_validator('prompt', mode='before')
+    @classmethod
+    def strip_prompt(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return value.strip()
+
+
+class PatchCourtshipState(BaseModel):
+    first_call_status: Optional[Literal['not-planned', 'planning', 'scheduled', 'completed']] = None
+    first_call_timing: Optional[str] = Field(default=None, max_length=240)
+    first_call_plan: Optional[str] = Field(default=None, max_length=1000)
+    ready_for_video_call: Optional[bool] = None
+    ready_for_family_introduction: Optional[bool] = None
+    dismiss_prompt: Optional[bool] = None
+
+    @field_validator('first_call_timing', 'first_call_plan', mode='before')
+    @classmethod
+    def strip_courtship_text(cls, value):
+        if value is None:
+            return value
+        return str(value).strip()
+
+    @model_validator(mode='after')
+    def check_at_least_one(self):
+        if not self.__pydantic_fields_set__:
+            raise ValueError('At least one value must be set')
+        return self
+
+
+class IntroGateQuestionItem(BaseModel):
+    id: Optional[int] = None
+    prompt: str = Field(min_length=1, max_length=240)
+    answer_type: Literal['yes_no', 'free_text']
+    response_mode: Literal['text', 'voice', 'both'] = 'text'
+    is_required: bool = True
+    ordinal: int = Field(ge=0, le=9)
+    is_active: bool = True
+
+    @field_validator('prompt', mode='before')
+    @classmethod
+    def strip_prompt_text(cls, value):
+        return str(value or '').strip()
+
+
+class PutIntroGateQuestions(BaseModel):
+    questions: list[IntroGateQuestionItem] = Field(default_factory=list, max_length=10)
+
+
+class IntroRequestAnswerItem(BaseModel):
+    question_id: Optional[int] = None
+    prompt_snapshot: str = Field(default='', max_length=240)
+    answer_type: Literal['yes_no', 'free_text']
+    response_mode: Literal['text', 'voice', 'both'] = 'text'
+    answer_text: Optional[str] = Field(default='', max_length=1000)
+    answer_bool: Optional[bool] = None
+    base64_audio_file: Optional[Base64AudioFile] = None
+
+    @field_validator('prompt_snapshot', 'answer_text', mode='before')
+    @classmethod
+    def strip_answer_text(cls, value):
+        return '' if value is None else str(value).strip()
+
+
+class PostIntroRequest(BaseModel):
+    note: Optional[str] = Field(default='', max_length=1000)
+    reason_for_reaching_out: Optional[str] = Field(default='', max_length=1000)
+    why_we_may_match: Optional[str] = Field(default='', max_length=600)
+    base64_audio_file: Optional[Base64AudioFile] = None
+    answers: list[IntroRequestAnswerItem] = Field(default_factory=list, max_length=10)
+
+    @field_validator('note', 'reason_for_reaching_out', 'why_we_may_match', mode='before')
+    @classmethod
+    def strip_note(cls, value):
+        return '' if value is None else str(value).strip()
+
+
+class PostExternalReport(BaseModel):
+    reporter_name: str = Field(min_length=1, max_length=120)
+    reporter_email: EmailStr
+    relationship_to_user: str = Field(min_length=1, max_length=120)
+    target_name: str = Field(min_length=1, max_length=120)
+    target_email: Optional[str] = Field(default='', max_length=320)
+    target_profile_url: Optional[str] = Field(default='', max_length=500)
+    claim: str = Field(min_length=10, max_length=5000)
+    evidence_details: str = Field(min_length=10, max_length=10000)
+    base64_file: Optional[Base64File] = None
+
+    @field_validator(
+        'reporter_name',
+        'relationship_to_user',
+        'target_name',
+        'target_email',
+        'target_profile_url',
+        'claim',
+        'evidence_details',
+        mode='before',
+    )
+    @classmethod
+    def strip_text_fields(cls, value):
+        if value is None:
+            return value
+        return str(value).strip()
+
+    @field_validator('reporter_email', mode='before')
+    def validate_reporter_email(cls, value):
+        return EmailStr._validate(value.lower().strip())
+
+
+class Base64Attachment(BaseModel):
+    base64: str
+    bytes: bytes
+    mime_type: str = Field(min_length=1, max_length=120)
+    file_name: str = Field(min_length=1, max_length=255)
+
+    @model_validator(mode='before')
+    def convert_base64(cls, values):
+        try:
+            base64_value = values['base64'].split(',')[-1]
+        except Exception:
+            raise ValueError('Attachment must be a valid base64 string')
+
+        try:
+            decoded_bytes = base64.b64decode(base64_value)
+        except base64.binascii.Error:
+            raise ValueError('Attachment must be a valid base64 string')
+
+        max_attachment_bytes = 10 * 1024 * 1024
+        if len(decoded_bytes) > max_attachment_bytes:
+            raise ValueError(
+                f'Attachment must be smaller than '
+                f'{human_readable_size_metric(max_attachment_bytes)}'
+            )
+
+        values['bytes'] = decoded_bytes
+        values['mime_type'] = str(values.get('mime_type') or '').strip()
+        values['file_name'] = str(values.get('file_name') or '').strip()
+
+        if not values['mime_type']:
+            raise ValueError('Attachment mime_type is required')
+
+        if not values['file_name']:
+            raise ValueError('Attachment file_name is required')
+
+        return values
+
+
+class PostAdminSupportMessage(BaseModel):
+    body: Optional[str] = Field(default='', max_length=4000)
+    attachment: Optional[Base64Attachment] = None
+
+    @field_validator('body', mode='before')
+    @classmethod
+    def strip_body(cls, value):
+        return '' if value is None else str(value).strip()
+
+    @model_validator(mode='after')
+    def require_body_or_attachment(self):
+        if not self.body and self.attachment is None:
+            raise ValueError('Message body or attachment is required')
+        return self
 
 
 class ValidDatetime(BaseModel):

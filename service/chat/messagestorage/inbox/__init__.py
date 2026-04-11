@@ -23,6 +23,26 @@ ORDER BY
 """
 
 
+Q_ARCHIVE_STALE_INBOX = """
+WITH config AS (
+    SELECT COALESCE(
+        MAX(CASE WHEN key = 'system_conversation_auto_close_days' THEN NULLIF(value, '')::INT END),
+        10
+    ) AS auto_close_days
+    FROM admin_setting
+)
+UPDATE inbox
+SET
+    box = 'archive',
+    unread_count = 0
+FROM config
+WHERE
+    inbox.luser = %(username)s
+AND inbox.box = 'chats'
+AND inbox.timestamp < ((EXTRACT(EPOCH FROM NOW() - (config.auto_close_days || ' days')::interval) * 1e6)::BIGINT)
+"""
+
+
 Q_UPSERT_CONVERSATION = f"""
 WITH upsert_sender AS (
     INSERT INTO inbox (
@@ -142,6 +162,7 @@ async def _get_inbox(query_id: str, username: str) -> list[str]:
     :return: A list of XML strings representing each message.
     """
     async with asyncdatabase.api_tx('read committed') as tx:
+        await tx.execute(Q_ARCHIVE_STALE_INBOX, dict(username=username))
         await tx.execute(Q_GET_INBOX, dict(username=username))
         rows = await tx.fetchall()
 

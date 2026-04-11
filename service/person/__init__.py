@@ -4643,12 +4643,14 @@ def post_dismiss_donation(s: t.SessionInfo):
 @lru_cache()
 def get_stats(ttl_hash=None):
     with api_tx('READ COMMITTED') as tx:
-        return tx.execute(Q_STATS).fetchone()
+        row = tx.execute(Q_STATS).fetchone()
+        return dict(row) if row is not None else {}
 
 @lru_cache()
 def get_gender_stats(ttl_hash=None):
     with api_tx('READ COMMITTED') as tx:
-        return tx.execute(Q_GENDER_STATS).fetchone()
+        row = tx.execute(Q_GENDER_STATS).fetchone()
+        return dict(row) if row is not None else {}
 
 def get_admin_ban_link(token: str):
     params = dict(token=token)
